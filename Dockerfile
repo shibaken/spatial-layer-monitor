@@ -1,5 +1,7 @@
 # Prepare the base environment.
-FROM ghcr.io/dbca-wa/docker-apps-dev:ubuntu_2510_base_python AS builder_base_spatial_layer_monitor
+# FROM ghcr.io/dbca-wa/docker-apps-dev:ubuntu_2510_base_python AS builder_base_spatial_layer_monitor
+FROM ubuntu:26.04 AS builder_base_spatial_layer_monitor
+# FROM ghcr.io/dbca-wa/docker-apps-dev:ubuntu_2604_base_python AS builder_base_spatial_layer_monitor
 
 LABEL maintainer="asi@dbca.wa.gov.au"
 LABEL org.opencontainers.image.source="https://github.com/dbca-wa/spatial-layer-monitor"
@@ -16,6 +18,21 @@ RUN mv /etc/apt/sourcesau.list /etc/apt/sources.list
 
 # Key for Build purposes only
 ENV FIELD_ENCRYPTION_KEY="Mv12YKHFm4WgTXMqvnoUUMZPpxx1ZnlFkfGzwactcdM="
+
+############################
+# 1. Install base packages found in the official base image
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl wget git libmagic-dev gcc g++ make binutils \
+    libproj-dev gdal-bin python3 python3-setuptools python3-dev python3-pip \
+    tzdata rsyslog gunicorn virtualenv libpq-dev patch \
+    postgresql-client mtr htop vim sudo build-essential \
+    && apt-get clean
+
+# 2. Setup environment structures (Mimicking base image)
+# Essential for SSL and Python command compatibility
+RUN update-ca-certificates && \
+    ln -s /usr/bin/python3 /usr/bin/python
+############################
 
 # Key for Build purposes only
 RUN apt-get clean && \
@@ -60,7 +77,26 @@ RUN git config --global --add safe.directory /app
 COPY requirements.txt ./
 COPY python-cron ./
 RUN whoami
-RUN /app/venv/bin/pip install --upgrade pip
+
+# --- GDAL SETUP START ---
+# 1. Provide the compiler with explicit paths to the GDAL C++ header files.
+# In newer Ubuntu 26.04 / Python 3.14+ environments, the build system often fails 
+# to automatically locate 'gdal.h'. These environment variables ensure the Python 
+# wrapper can find the underlying C++ headers required for compilation.
+ENV CPLUS_INCLUDE_PATH=/usr/include/gdal
+ENV C_INCLUDE_PATH=/usr/include/gdal
+
+# 2. Synchronize and pre-install the Python GDAL package with the system library version.
+# GDAL's Python bindings are extremely sensitive to version mismatches with the 
+# system's 'libgdal'. By detecting the version via 'gdal-config' and installing it 
+# separately, we avoid the "Failed to build GDAL" errors that occur when pip tries 
+# to compile an incompatible version from 'requirements.txt'.
+RUN export GDAL_VERSION=$(gdal-config --version) && \
+    pip install --upgrade pip setuptools wheel && \
+    pip install "GDAL==${GDAL_VERSION}.*"
+# --- GDAL SETUP END ---
+
+# RUN /app/venv/bin/pip install --upgrade pip
 RUN /app/venv/bin/pip install --no-cache-dir -r requirements.txt 
 
 COPY --chown=oim:oim spatial_layer_monitor spatial_layer_monitor
